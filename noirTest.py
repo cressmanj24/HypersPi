@@ -2,6 +2,7 @@ from picamera import PiCamera
 from time import sleep
 from PIL import Image
 from io import BytesIO
+import os
 import math
 import RPi.GPIO as GPIO
 import datetime
@@ -11,6 +12,34 @@ def servoAngle(angle):
 
 #Get current system time
 time = datetime.datetime.now()
+
+os.mkdir('/home/pi/Pictures/scan' + time.isoformat())
+
+d = 2000.0          #spacing between diffraction grating in nm
+lambda0 = 400.0     #minimum wavelength of interest in nm
+lambda1 = 900.0     #maximum wavelength of interest in nm
+phiMax = 62.2       #camera's field of view
+stepAngle = .5      #angular resolution of servo
+
+#Angle of minimum wavelength of interest from theta = 0 in degrees
+theta0 = degrees(math.asin(lambda0/d))
+
+#Angle of maximum wavelength of interest from theta = 0 in degrees
+theta1 = degrees(math.asin(lambda1/d))
+
+#Maximum servo angle
+thetaMax = phiMax + theta1
+
+#Minimum servo angle
+thetaMin = 0.0 + theta0
+
+xres = 3280     #the raw resolution of the camera
+yres = 2464
+
+rat  = yres / xres  #the aspect ratio
+
+xadj = phiMax/stepAngle
+yadj = phiMax/stepAngle * rat
 
 #Set up servo pin
 GPIO.setmode(GPIO.BCM)
@@ -34,39 +63,45 @@ sleep(5)
 #camera.color_effects = (128,128) #Monochrome mode
 noir.exposure_mode = 'off'
 
-composites = dict()
+composites = dict() #empty dictionary to contain hyperspectral cube
 
-#Sweep servo from 0 to 75.9 degrees
-for i in range(759):
-    theta = float(i)/10.0
+#Sweep servo from thetaMin to thetaMax degrees
+for theta in range(thetaMin, thetaMax, stepAngle)
     print("Theta: " + str(theta))
+
+    #Set servo to current theta
     servoAngle(theta)
 ##    sleep(.01)
 
     #Take a picture
-    noir.capture(stream, format='jpeg', resize=(759,570))
+    noir.capture(stream, format='jpeg', resize=(xadj, yadj))
     stream.seek(0)
-    image = Image.open(stream)
+    image = Image.open(stream)  #Turn the stream into a PIL Image object
+    stream.seek(0)
 
-    start = i + 115 - 252
-    if start < 0:
-        start = 0
+    #limits for interesting phi
+    startPhi = theta - theta1
+    if startPhi < 0:
+        startPhi = 0
+    endPhi = theta - theta0
+    if endPhi > phiMax:
+        endPhi = phiMax
+        
+    print("Start: " + str(startPhi) + ", End: " + str(endPhi))
 
-    end = i + 115
-    if end > 759:
-        end = 759
-    print("Start: " + str(start) + ", End: " + str(end))
+    for phi in range(startPhi, endPhi, stepAngle):
+        
+        print ("Phi: " + str(phi))
+        col = int(phi/stepAngle)    #column of interest
+        strip = image.crop((col, 0, col + 1, yadj))
 
-    for n in range(start, end):
-        phi = n / 10.0
-        print ("n: " + str(n))
-        strip = image.crop((n,0,n+1,570))
-        lamda = int(2000*math.sin(math.radians(11.5 + theta -phi)))
+        #the wavelength
+         lamda = int(d * math.sin(math.radians(theta - phi)))
         if not(lamda in composites):
-            composites[lamda] = Image.new("RGB", (759, 570))
-        composites[lamda].paste(strip,(n,0,n+1,570))
+            composites[lamda] = Image.new("RGB", (xadj, yadj))
+        composites[lamda].paste(strip,(col, 0, col+1,yadj))
 
 for lamda in composites:
-    composites[lamda].save('/home/pi/Pictures/scan' + time.isoformat() + str(lamda) + 'nm.jpg')
+    composites[lamda].save('/home/pi/Pictures/scan' + time.isoformat() + '/' + str(lamda) + 'nm.jpg')
     
 noir.stop_preview()
